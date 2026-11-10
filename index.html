@@ -33,7 +33,9 @@ select{font:inherit;font-size:.9rem;color:var(--ink);background:#120809;border:1
 #hint{position:fixed;inset:0;display:grid;place-items:center;text-align:center;color:var(--dim);font-family:"IM Fell English",Georgia,serif;font-style:italic;font-size:1.4rem;padding:2rem;pointer-events:none}
 #hint.gone{display:none}
 #bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:.75rem 1rem;display:flex;flex-direction:column;gap:.6rem;transition:opacity .5s;max-height:80vh;overflow:auto}
-#bar.hide{opacity:0}
+#bar.hide{opacity:0;pointer-events:none}
+#bar{touch-action:pan-y}
+body{touch-action:none}
 .row{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center}
 button,.btn{font:inherit;font-size:.9rem;color:var(--ink);background:#1d0d11;border:1px solid var(--line);border-radius:4px;padding:.45rem .8rem;cursor:pointer}
 button:hover,.btn:hover{border-color:var(--red)}
@@ -74,6 +76,18 @@ output{min-width:3.6rem;text-align:center;font-variant-numeric:tabular-nums}
   <button id="bgx">Quitar fondo</button>
   <label class="lbl">Oscurecer <input type="range" id="shd" min="0" max="90" value="45" style="vertical-align:middle"></label>
  </div>
+
+ <details id="adj">
+  <summary>Ajustar fondo</summary>
+  <div class="row">
+   <label class="lbl">Ajuste <select id="fit"><option value="cover">Rellenar</option><option value="contain">Completa</option><option value="fill">Estirar</option></select></label>
+   <label class="lbl">Zoom <input type="range" id="zoom" min="100" max="300" value="100"></label>
+   <label class="lbl">← → <input type="range" id="px" min="0" max="100" value="50"></label>
+   <label class="lbl">↑ ↓ <input type="range" id="py" min="0" max="100" value="50"></label>
+   <button id="rst">Restablecer</button>
+  </div>
+  <div class="lbl" style="margin-top:.5rem">También puedes arrastrar el fondo con el dedo o el mouse.</div>
+ </details>
 
  <details id="lyr" open>
   <summary>Letras</summary>
@@ -212,8 +226,26 @@ $('#bgf').onchange = e => {
     el = document.createElement('img'); el.src = bgUrl; el.alt = '';
   }
   bg.appendChild(el);
+  resetBg();
   say('Fondo cargado. Ajusta "Oscurecer" si el texto no se lee bien.');
 };
+const bgS = { fit: 'cover', z: 100, x: 50, y: 50 };
+const clamp = v => Math.max(0, Math.min(100, v));
+function applyBg() {
+  const el = bg.firstElementChild;
+  if (!el) return;
+  el.style.objectFit = bgS.fit;
+  el.style.objectPosition = bgS.x + '% ' + bgS.y + '%';
+  el.style.transformOrigin = bgS.x + '% ' + bgS.y + '%';
+  el.style.transform = 'scale(' + bgS.z / 100 + ')';
+}
+function syncSliders() { $('#fit').value = bgS.fit; $('#zoom').value = bgS.z; $('#px').value = bgS.x; $('#py').value = bgS.y; }
+function resetBg() { Object.assign(bgS, { fit: 'cover', z: 100, x: 50, y: 50 }); syncSliders(); applyBg(); }
+$('#fit').onchange = e => { bgS.fit = e.target.value; applyBg(); };
+$('#zoom').oninput = e => { bgS.z = +e.target.value; applyBg(); };
+$('#px').oninput = e => { bgS.x = +e.target.value; applyBg(); };
+$('#py').oninput = e => { bgS.y = +e.target.value; applyBg(); };
+$('#rst').onclick = resetBg;
 $('#bgx').onclick = () => { clearBg(); say('Fondo quitado.'); };
 $('#shd').oninput = e => $('#shade').style.opacity = e.target.value / 100;
 a.addEventListener('play', () => { const v = bg.querySelector('video'); if (v) v.play().catch(() => {}); });
@@ -301,20 +333,55 @@ addEventListener('keydown', e => {
   if (e.code === 'Space' && sync) { e.preventDefault(); tap(); }
   if (e.key === '[') nudge(-0.5);
   if (e.key === ']') nudge(0.5);
+  if (e.key === 'h' || e.key === 'H') bar.classList.contains('hide') ? showBar() : hideBar(true);
 });
 $('#fs').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
 
-let hideT;
-function wake() {
+let hideT, drag = null, armed = true;
+function typing() {
+  const t = document.activeElement;
+  return t && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type === 'text'));
+}
+function hideBar(force) {
+  if (a.paused || sync || typing()) return;
+  if (!force && bar.matches(':hover')) { clearTimeout(hideT); hideT = setTimeout(hideBar, 1500); return; }
+  if (bar.contains(document.activeElement)) document.activeElement.blur();
+  bar.classList.add('hide');
+  armed = false;
+}
+function showBar() {
   bar.classList.remove('hide');
   clearTimeout(hideT);
-  hideT = setTimeout(() => {
-    if (!a.paused && !sync && !bar.matches(':hover') && !bar.matches(':focus-within')) bar.classList.add('hide');
-  }, 3500);
+  hideT = setTimeout(hideBar, 3000);
 }
-['mousemove', 'touchstart', 'keydown'].forEach(ev => addEventListener(ev, wake));
-a.addEventListener('play', wake);
-a.addEventListener('pause', wake);
+a.addEventListener('play', () => { clearTimeout(hideT); hideT = setTimeout(() => hideBar(true), 700); });
+a.addEventListener('pause', showBar);
+addEventListener('mousemove', e => {
+  const inZone = e.clientY > innerHeight - bar.offsetHeight - 20;
+  if (!inZone) armed = true;
+  else if (armed) showBar();
+});
+
+/* Arrastrar el fondo; un toque corto muestra u oculta el panel */
+addEventListener('pointerdown', e => {
+  if (bar.contains(e.target)) return;
+  drag = { x: e.clientX, y: e.clientY, sx: bgS.x, sy: bgS.y, moved: false };
+});
+addEventListener('pointermove', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (Math.abs(dx) + Math.abs(dy) > 6) drag.moved = true;
+  if (drag.moved && bg.firstElementChild) {
+    bgS.x = clamp(drag.sx - dx / innerWidth * 100 / (bgS.z / 100));
+    bgS.y = clamp(drag.sy - dy / innerHeight * 100 / (bgS.z / 100));
+    syncSliders(); applyBg();
+  }
+});
+addEventListener('pointerup', () => {
+  if (drag && !drag.moved) bar.classList.contains('hide') ? showBar() : hideBar(true);
+  drag = null;
+});
+addEventListener('pointercancel', () => { drag = null; });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
