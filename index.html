@@ -23,6 +23,13 @@ body{background:radial-gradient(ellipse at 50% 65%,#2c0a11 0%,var(--bg) 68%);col
 .ch{display:inline-block;opacity:0;animation:ch .55s ease-out forwards}
 @keyframes ch{0%{opacity:0;filter:blur(8px);transform:translateY(12px)}100%{opacity:1;filter:blur(0);transform:none}}
 @media (prefers-reduced-motion:reduce){.ch{animation:none;opacity:1}}
+#bg{position:fixed;inset:0;z-index:-2;overflow:hidden;background:#000}
+#bg img,#bg video{width:100%;height:100%;object-fit:cover;display:block}
+#shade{position:fixed;inset:0;z-index:-1;background:#000;opacity:.45;pointer-events:none}
+.line.instant{animation:pop .25s ease-out}
+.line.instant .ch{animation:none;opacity:1}
+@keyframes pop{from{opacity:0;filter:blur(6px)}to{opacity:1;filter:none}}
+select{font:inherit;font-size:.9rem;color:var(--ink);background:#120809;border:1px solid var(--line);border-radius:4px;padding:.4rem .5rem}
 #hint{position:fixed;inset:0;display:grid;place-items:center;text-align:center;color:var(--dim);font-family:"IM Fell English",Georgia,serif;font-style:italic;font-size:1.4rem;padding:2rem;pointer-events:none}
 #hint.gone{display:none}
 #bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:.75rem 1rem;display:flex;flex-direction:column;gap:.6rem;transition:opacity .5s;max-height:80vh;overflow:auto}
@@ -44,6 +51,8 @@ output{min-width:3.6rem;text-align:center;font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
+<div id="bg"></div>
+<div id="shade"></div>
 <div id="stage"></div>
 <div id="hint">Carga un MP3 y busca su letra</div>
 
@@ -52,11 +61,18 @@ output{min-width:3.6rem;text-align:center;font-variant-numeric:tabular-nums}
   <label class="btn">Cargar MP3<input type="file" id="mp3" accept="audio/*" hidden></label>
   <audio id="a" controls></audio>
   <label class="lbl">Color <input type="color" id="col" value="#d9a441" style="vertical-align:middle;background:none;border:0;width:2rem;height:1.6rem;padding:0"></label>
+  <label class="lbl">Texto <select id="spd"><option value="0">Instantáneo</option><option value="0.3">Rápido</option><option value="1" selected>Normal</option></select></label>
   <span class="lbl">Desfase</span>
   <button id="less" title="Letras antes (tecla [)">−0,5 s</button>
   <output id="off">0,0 s</output>
   <button id="more" title="Letras después (tecla ])">+0,5 s</button>
   <button id="fs">Pantalla completa</button>
+ </div>
+
+ <div class="row">
+  <label class="btn">Fondo (foto o video)<input type="file" id="bgf" accept="image/*,video/*" hidden></label>
+  <button id="bgx">Quitar fondo</button>
+  <label class="lbl">Oscurecer <input type="range" id="shd" min="0" max="90" value="45" style="vertical-align:middle"></label>
  </div>
 
  <details id="lyr" open>
@@ -146,9 +162,11 @@ function show(i) {
   const d = document.createElement('div');
   d.className = 'line';
   place(d);
-  const typeT = Math.min(Math.max(gap * 0.5, 0.6), 2.4);
+  const f = parseFloat($('#spd').value);
+  if (f === 0) d.classList.add('instant');
+  const typeT = Math.min(Math.max(gap * 0.5, 0.6), 2.4) * f;
   const n = l.text.replace(/\s/g, '').length || 1;
-  const step = Math.min(0.09, Math.max(0.02, typeT / n));
+  const step = f === 0 ? 0 : Math.min(0.09, Math.max(0.01, typeT / n));
   let k = 0;
   const words = l.text.split(/\s+/);
   words.forEach((w, wi) => {
@@ -176,6 +194,30 @@ function tick() {
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
+/* ---------- Fondo ---------- */
+const bg = $('#bg'); let bgUrl = null;
+function clearBg() { bg.innerHTML = ''; if (bgUrl) URL.revokeObjectURL(bgUrl); bgUrl = null; }
+$('#bgf').onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  clearBg();
+  bgUrl = URL.createObjectURL(f);
+  let el;
+  if (f.type.startsWith('video')) {
+    el = document.createElement('video');
+    el.src = bgUrl; el.muted = true; el.loop = true; el.preload = 'auto';
+    el.setAttribute('playsinline', '');
+    if (!a.paused) el.play().catch(() => {});
+  } else {
+    el = document.createElement('img'); el.src = bgUrl; el.alt = '';
+  }
+  bg.appendChild(el);
+  say('Fondo cargado. Ajusta "Oscurecer" si el texto no se lee bien.');
+};
+$('#bgx').onclick = () => { clearBg(); say('Fondo quitado.'); };
+$('#shd').oninput = e => $('#shade').style.opacity = e.target.value / 100;
+a.addEventListener('play', () => { const v = bg.querySelector('video'); if (v) v.play().catch(() => {}); });
+a.addEventListener('pause', () => { const v = bg.querySelector('video'); if (v) v.pause(); });
 $('#col').oninput = e => document.documentElement.style.setProperty('--txt', e.target.value);
 a.addEventListener('seeked', reseek);
 a.addEventListener('loadedmetadata', reseek);
