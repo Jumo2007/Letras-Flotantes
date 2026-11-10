@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Letras flotantes</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a0607">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0607;--ink:#f1e6d0;--red:#b3122b;--gold:#d9a441;--dim:#8b7f6e;--panel:rgba(16,9,11,.94);--line:#3a1a20;--txt:#d9a441}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:radial-gradient(ellipse at 50% 65%,#2c0a11 0%,var(--bg) 68%);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+#stage{position:fixed;inset:0;pointer-events:none;overflow:hidden}
+.line{position:absolute;left:50%;top:40%;width:max-content;max-width:84vw;text-align:center;transform:translate(-50%,-50%);font-family:"IM Fell English",Georgia,serif;font-style:italic;font-size:clamp(1.8rem,5vw,3.6rem);line-height:1.25;color:var(--txt);text-shadow:0 0 22px var(--txt),0 0 3px rgba(0,0,0,.9);transition:opacity .8s,filter .8s}
+.line.out{opacity:0;filter:blur(6px)}
+.w{display:inline-block;white-space:nowrap}
+.ch{display:inline-block;opacity:0;animation:ch .55s ease-out forwards}
+@keyframes ch{0%{opacity:0;filter:blur(8px);transform:translateY(12px)}100%{opacity:1;filter:blur(0);transform:none}}
+@media (prefers-reduced-motion:reduce){.ch{animation:none;opacity:1}}
+#hint{position:fixed;inset:0;display:grid;place-items:center;text-align:center;color:var(--dim);font-family:"IM Fell English",Georgia,serif;font-style:italic;font-size:1.4rem;padding:2rem;pointer-events:none}
+#hint.gone{display:none}
+#bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:.75rem 1rem;display:flex;flex-direction:column;gap:.6rem;transition:opacity .5s;max-height:80vh;overflow:auto}
+#bar.hide{opacity:0}
+.row{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center}
+button,.btn{font:inherit;font-size:.9rem;color:var(--ink);background:#1d0d11;border:1px solid var(--line);border-radius:4px;padding:.45rem .8rem;cursor:pointer}
+button:hover,.btn:hover{border-color:var(--red)}
+button.main{background:var(--red);border-color:var(--red)}
+:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+audio{flex:1 1 240px;min-width:200px;height:36px}
+input[type=text],textarea{font:inherit;font-size:.9rem;color:var(--ink);background:#120809;border:1px solid var(--line);border-radius:4px;padding:.45rem .6rem}
+input[type=text]{flex:1 1 140px;min-width:0}
+textarea{width:100%;min-height:120px;resize:vertical}
+details summary{cursor:pointer;color:var(--gold);font-size:.9rem}
+details .row,details textarea{margin-top:.6rem}
+output{min-width:3.6rem;text-align:center;font-variant-numeric:tabular-nums}
+#status{font-size:.85rem;color:var(--dim);min-height:1.2em}
+.lbl{font-size:.85rem;color:var(--dim)}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="hint">Carga un MP3 y busca su letra</div>
+
+<div id="bar">
+ <div class="row">
+  <label class="btn">Cargar MP3<input type="file" id="mp3" accept="audio/*" hidden></label>
+  <audio id="a" controls></audio>
+  <label class="lbl">Color <input type="color" id="col" value="#d9a441" style="vertical-align:middle;background:none;border:0;width:2rem;height:1.6rem;padding:0"></label>
+  <span class="lbl">Desfase</span>
+  <button id="less" title="Letras antes (tecla [)">−0,5 s</button>
+  <output id="off">0,0 s</output>
+  <button id="more" title="Letras después (tecla ])">+0,5 s</button>
+  <button id="fs">Pantalla completa</button>
+ </div>
+
+ <details id="lyr" open>
+  <summary>Letras</summary>
+  <div class="row">
+   <input type="text" id="artist" placeholder="Artista" aria-label="Artista">
+   <input type="text" id="title" placeholder="Canción" aria-label="Canción">
+   <button class="main" id="find">Buscar letra sincronizada</button>
+  </div>
+  <div class="row">
+   <label class="btn">Cargar archivo .lrc<input type="file" id="lrc" accept=".lrc,.txt" hidden></label>
+   <button id="dl">Descargar .lrc</button>
+  </div>
+ </details>
+
+ <details>
+  <summary>Sincronizar yo mismo</summary>
+  <textarea id="raw" placeholder="Pega aquí la letra, una línea por renglón"></textarea>
+  <div class="row">
+   <button class="main" id="startSync">Empezar sincronización</button>
+   <button id="tap" hidden>Marcar línea (Espacio)</button>
+  </div>
+ </details>
+
+ <div id="status" role="status">Pon el MP3, escribe artista y canción, y busca la letra.</div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const a = $('#a'), stage = $('#stage'), bar = $('#bar');
+let lines = [], idx = 0, offset = 0, lrcText = '', sync = null;
+const say = t => $('#status').textContent = t;
+const fmtOff = () => (offset >= 0 ? '+' : '−') + Math.abs(offset).toFixed(1).replace('.', ',') + ' s';
+const fmt = t => { const m = Math.floor(t / 60); return String(m).padStart(2, '0') + ':' + (t - m * 60).toFixed(2).padStart(5, '0'); };
+
+/* ---------- Letras ---------- */
+function parseLRC(txt) {
+  const out = [];
+  for (const row of txt.split(/\r?\n/)) {
+    const tags = [...row.matchAll(/\[(\d+):(\d+(?:[.,]\d+)?)\]/g)];
+    const text = row.replace(/\[[^\]]*\]/g, '').trim();
+    if (!tags.length || !text) continue;
+    for (const m of tags) out.push({ t: +m[1] * 60 + parseFloat(m[2].replace(',', '.')), text });
+  }
+  return out.sort((x, y) => x.t - y.t);
+}
+function setLyrics(txt) {
+  lrcText = txt;
+  lines = parseLRC(txt);
+  reseek();
+  $('#hint').classList.toggle('gone', lines.length > 0);
+}
+function reseek() {
+  const t = a.currentTime - offset;
+  idx = lines.findIndex(l => l.t > t - 0.3);
+  if (idx < 0) idx = lines.length;
+  stage.innerHTML = ''; cur = null;
+}
+
+/* ---------- Efecto: una línea fija, letra por letra ---------- */
+let cur = null, lastSlot = null;
+const SLOTS = [
+  { x: 7, y: 20, a: 'left' },  { x: 7, y: 42, a: 'left' },  { x: 7, y: 64, a: 'left' },
+  { x: 7, y: 20, a: 'right' }, { x: 7, y: 42, a: 'right' }, { x: 7, y: 64, a: 'right' },
+  { x: 50, y: 30, a: 'center' }, { x: 50, y: 55, a: 'center' }
+];
+function place(d) {
+  let pool = SLOTS.filter(s => s !== lastSlot && (!lastSlot || s.a !== lastSlot.a));
+  if (innerWidth < 700) pool = SLOTS.filter(s => s.a === 'center' && s !== lastSlot);
+  const s = pool[Math.floor(Math.random() * pool.length)];
+  lastSlot = s;
+  d.style.top = s.y + 'vh';
+  if (s.a === 'left') { d.style.left = s.x + 'vw'; d.style.transform = 'translateY(-50%)'; d.style.textAlign = 'left'; d.style.maxWidth = '48vw'; }
+  if (s.a === 'right') { d.style.left = 'auto'; d.style.right = s.x + 'vw'; d.style.transform = 'translateY(-50%)'; d.style.textAlign = 'right'; d.style.maxWidth = '48vw'; }
+}
+function fadeCur() {
+  if (!cur) return;
+  const el = cur.el;
+  el.classList.add('out');
+  setTimeout(() => el.remove(), 900);
+  cur = null;
+}
+function show(i) {
+  const l = lines[i], next = lines[i + 1];
+  const gap = next ? next.t - l.t : 6;
+  fadeCur();
+  const d = document.createElement('div');
+  d.className = 'line';
+  place(d);
+  const typeT = Math.min(Math.max(gap * 0.5, 0.6), 2.4);
+  const n = l.text.replace(/\s/g, '').length || 1;
+  const step = Math.min(0.09, Math.max(0.02, typeT / n));
+  let k = 0;
+  const words = l.text.split(/\s+/);
+  words.forEach((w, wi) => {
+    const ws = document.createElement('span');
+    ws.className = 'w';
+    for (const c of w) {
+      const s = document.createElement('span');
+      s.className = 'ch';
+      s.textContent = c;
+      s.style.animationDelay = (k++ * step) + 's';
+      ws.appendChild(s);
+    }
+    d.appendChild(ws);
+    if (wi < words.length - 1) d.appendChild(document.createTextNode(' '));
+  });
+  stage.appendChild(d);
+  cur = { el: d, end: l.t + Math.min(gap, 10) };
+}
+function tick() {
+  const t = a.currentTime - offset;
+  let last = -1;
+  while (idx < lines.length && lines[idx].t <= t) { last = idx; idx++; }
+  if (last >= 0 && t - lines[last].t < 2) show(last);
+  if (cur && t >= cur.end) fadeCur();
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+$('#col').oninput = e => document.documentElement.style.setProperty('--txt', e.target.value);
+a.addEventListener('seeked', reseek);
+a.addEventListener('loadedmetadata', reseek);
+
+/* ---------- Cargar MP3 ---------- */
+$('#mp3').onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  a.src = URL.createObjectURL(f);
+  const base = f.name.replace(/\.[^.]+$/, '');
+  const parts = base.split(' - ');
+  if (parts.length >= 2) { $('#artist').value = parts[0].trim(); $('#title').value = parts.slice(1).join(' - ').trim(); }
+  else $('#title').value = base;
+  say('MP3 cargado. Revisa artista y canción y pulsa Buscar.');
+};
+
+/* ---------- Buscar en LRCLIB ---------- */
+$('#find').onclick = async () => {
+  const q = ($('#artist').value + ' ' + $('#title').value).trim();
+  if (!q) return say('Escribe artista y canción.');
+  say('Buscando…');
+  try {
+    const r = await fetch('https://lrclib.net/api/search?q=' + encodeURIComponent(q));
+    const hits = (await r.json()).filter(x => x.syncedLyrics);
+    if (!hits.length) return say('No hay letras sincronizadas para esa búsqueda. Prueba otro nombre, carga un .lrc o sincroniza tú mismo.');
+    if (isFinite(a.duration)) hits.sort((x, y) => Math.abs(x.duration - a.duration) - Math.abs(y.duration - a.duration));
+    setLyrics(hits[0].syncedLyrics);
+    say('Cargada: ' + hits[0].artistName + ' – ' + hits[0].trackName + '. Si sale desfasada, ajusta el desfase.');
+  } catch (err) {
+    say('No se pudo conectar con LRCLIB. Revisa tu conexión e inténtalo de nuevo.');
+  }
+};
+
+/* ---------- Archivo .lrc y descarga ---------- */
+$('#lrc').onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { setLyrics(r.result); say(lines.length ? 'Archivo .lrc cargado (' + lines.length + ' líneas).' : 'El archivo no tiene marcas de tiempo [mm:ss.xx].'); };
+  r.readAsText(f);
+};
+$('#dl').onclick = () => {
+  if (!lrcText) return say('Todavía no hay letras para descargar.');
+  const l = document.createElement('a');
+  l.href = URL.createObjectURL(new Blob([lrcText], { type: 'text/plain' }));
+  l.download = ($('#title').value || 'letra') + '.lrc';
+  l.click();
+};
+
+/* ---------- Desfase ---------- */
+function nudge(d) { offset = Math.round((offset + d) * 10) / 10; $('#off').textContent = fmtOff(); reseek(); }
+$('#less').onclick = () => nudge(-0.5);
+$('#more').onclick = () => nudge(0.5);
+
+/* ---------- Sincronizar a mano ---------- */
+function showNext() { say('Marca cuando empiece: “' + sync.rows[sync.i] + '” (' + (sync.i + 1) + '/' + sync.rows.length + ')'); }
+$('#startSync').onclick = () => {
+  const rows = $('#raw').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  if (!rows.length) return say('Pega la letra primero.');
+  if (!a.src) return say('Carga primero el MP3.');
+  sync = { rows, i: 0, out: [] };
+  a.currentTime = 0; a.play();
+  $('#tap').hidden = false;
+  showNext();
+};
+function tap() {
+  if (!sync) return;
+  sync.out.push({ t: a.currentTime, text: sync.rows[sync.i++] });
+  if (sync.i >= sync.rows.length) {
+    const txt = sync.out.map(l => '[' + fmt(l.t) + '] ' + l.text).join('\n');
+    sync = null; $('#tap').hidden = true;
+    setLyrics(txt); a.currentTime = 0;
+    say('Sincronización lista. Si quedó tarde por tu tiempo de reacción, usa el desfase. Puedes descargar el .lrc.');
+  } else showNext();
+}
+$('#tap').onclick = tap;
+
+/* ---------- Atajos y barra ---------- */
+addEventListener('keydown', e => {
+  if (['TEXTAREA', 'INPUT'].includes(e.target.tagName)) return;
+  if (e.code === 'Space' && sync) { e.preventDefault(); tap(); }
+  if (e.key === '[') nudge(-0.5);
+  if (e.key === ']') nudge(0.5);
+});
+$('#fs').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+
+let hideT;
+function wake() {
+  bar.classList.remove('hide');
+  clearTimeout(hideT);
+  hideT = setTimeout(() => {
+    if (!a.paused && !sync && !bar.matches(':hover') && !bar.matches(':focus-within')) bar.classList.add('hide');
+  }, 3500);
+}
+['mousemove', 'touchstart', 'keydown'].forEach(ev => addEventListener(ev, wake));
+a.addEventListener('play', wake);
+a.addEventListener('pause', wake);
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
