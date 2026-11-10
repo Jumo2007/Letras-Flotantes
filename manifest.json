@@ -1,6 +1,6 @@
 {
-  "name": "Letras flotantes",
-  "short_name": "Letras",
+  "name": "Cantos Songs Edit- LC",
+  "short_name": "Canto.LComp",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
