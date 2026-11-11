@@ -17,13 +17,13 @@
 html,body{height:100%;margin:0}
 body{background:radial-gradient(ellipse at 50% 65%,#2c0a11 0%,var(--bg) 68%);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
 #stage{position:fixed;inset:0;pointer-events:none;overflow:hidden}
-.line{position:absolute;left:50%;top:40%;width:max-content;max-width:84vw;text-align:center;transform:translate(-50%,-50%);font-family:"IM Fell English",Georgia,serif;font-style:italic;font-size:clamp(1.8rem,5vw,3.6rem);line-height:1.25;color:var(--txt);text-shadow:0 0 22px var(--txt),0 0 3px rgba(0,0,0,.9);transition:opacity .8s,filter .8s}
+.line{position:absolute;left:50%;top:40%;width:max-content;max-width:84vw;text-align:center;transform:translate(-50%,-50%);font-family:"IM Fell English",Georgia,serif;font-style:italic;font-size:clamp(1.8rem,5vw,3.6rem);line-height:1.25;color:var(--txt);text-shadow:0 0 calc(22px + var(--p,0) * 34px) var(--txt),0 0 3px rgba(0,0,0,.9);transition:opacity .8s,filter .8s}
 .line.out{opacity:0;filter:blur(6px)}
 .w{display:inline-block;white-space:nowrap}
 .ch{display:inline-block;opacity:0;animation:ch .55s ease-out forwards}
 @keyframes ch{0%{opacity:0;filter:blur(8px);transform:translateY(12px)}100%{opacity:1;filter:blur(0);transform:none}}
 @media (prefers-reduced-motion:reduce){.ch{animation:none;opacity:1}}
-#bg{position:fixed;inset:0;z-index:-2;overflow:hidden;background:#000}
+#bg{transform-origin:center;position:fixed;inset:0;z-index:-2;overflow:hidden;background:#000}
 #bg img,#bg video{width:100%;height:100%;object-fit:cover;display:block}
 #shade{position:fixed;inset:0;z-index:-1;background:#000;opacity:.45;pointer-events:none}
 .line.instant{animation:pop .25s ease-out}
@@ -92,6 +92,19 @@ output{min-width:3.6rem;text-align:center;font-variant-numeric:tabular-nums}
   <button id="bgx">Quitar fondo</button>
   <label class="lbl">Oscurecer <input type="range" id="shd" min="0" max="90" value="45" style="vertical-align:middle"></label>
  </div>
+
+ <details id="fx">
+  <summary>Estilo y efectos</summary>
+  <div class="row">
+   <label class="lbl">Pulso con la música <input type="range" id="pulse" min="0" max="100" value="50" style="vertical-align:middle"></label>
+   <label class="lbl"><input type="checkbox" id="wake" checked> Mantener pantalla encendida</label>
+  </div>
+  <div class="row">
+   <select id="sty" aria-label="Estilos guardados"></select>
+   <button id="savesty">Guardar estilo actual</button>
+   <button id="delsty">Borrar estilo</button>
+  </div>
+ </details>
 
  <div class="row">
   <button id="savebg">Guardar fondo</button>
@@ -240,6 +253,7 @@ function show(i) {
   cur = { el: d, end: l.t + Math.min(gap, 10) };
 }
 function tick() {
+  react();
   const t = a.currentTime - offset;
   let last = -1;
   while (idx < lines.length && lines[idx].t <= t) { last = idx; idx++; }
@@ -299,7 +313,7 @@ $('#bgx').onclick = () => {
   clearBg(); curBg = null; renderBgs(); say('Fondo quitado.');
   if (curSong) { curSong.bgId = ''; curSong.bgType = ''; saveMeta(); }
 };
-$('#shd').oninput = e => $('#shade').style.opacity = e.target.value / 100;
+$('#shd').oninput = e => { $('#shade').style.opacity = e.target.value / 100; saveSettings(); };
 a.addEventListener('play', () => { const v = bg.querySelector('video'); if (v) v.play().catch(() => {}); });
 a.addEventListener('pause', () => { const v = bg.querySelector('video'); if (v) v.pause(); });
 function setColor(c) { $('#col').value = c; document.documentElement.style.setProperty('--txt', c); }
@@ -577,6 +591,108 @@ a.addEventListener('ended', () => {
 if ('mediaSession' in navigator) {
   try { navigator.mediaSession.setActionHandler('nexttrack', () => go(1)); navigator.mediaSession.setActionHandler('previoustrack', () => go(-1)); } catch (err) {}
 }
+/* ---------- Ajustes, estilos, pulso y pantalla encendida ---------- */
+const LS = {
+  get(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v === null ? d : v; } catch (err) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (err) {} }
+};
+function saveSettings() { LS.set('canto-ajustes', { spd: $('#spd').value, shade: $('#shd').value, pulse: $('#pulse').value, wake: $('#wake').checked }); }
+const cfg = LS.get('canto-ajustes', {});
+if (cfg.spd !== undefined) $('#spd').value = cfg.spd;
+if (cfg.shade !== undefined) { $('#shd').value = cfg.shade; $('#shade').style.opacity = cfg.shade / 100; }
+if (cfg.pulse !== undefined) $('#pulse').value = cfg.pulse;
+if (cfg.wake !== undefined) $('#wake').checked = cfg.wake;
+$('#spd').onchange = saveSettings;
+
+/* Pantalla encendida */
+let wl = null;
+async function wakeOn() {
+  if (!$('#wake').checked || !('wakeLock' in navigator) || wl) return;
+  try { wl = await navigator.wakeLock.request('screen'); wl.addEventListener('release', () => { wl = null; }); } catch (err) {}
+}
+function wakeOff() { if (wl) { wl.release().catch(() => {}); wl = null; } }
+a.addEventListener('play', wakeOn);
+a.addEventListener('pause', wakeOff);
+a.addEventListener('ended', wakeOff);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && !a.paused) wakeOn(); });
+$('#wake').onchange = () => { if ($('#wake').checked) { if (!a.paused) wakeOn(); } else wakeOff(); saveSettings(); };
+
+/* Pulso: el fondo y el brillo del texto laten con los graves */
+let actx = null, an = null, fbuf = null, avgB = 0, pv = 0, lastE = 0;
+function initAudio() {
+  if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+  try {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = actx.createMediaElementSource(a);
+    an = actx.createAnalyser(); an.fftSize = 1024; an.smoothingTimeConstant = 0.6;
+    src.connect(an); an.connect(actx.destination);
+    fbuf = new Uint8Array(an.frequencyBinCount);
+    if (actx.state === 'suspended') actx.resume();
+  } catch (err) { actx = null; an = null; }
+}
+function onPulse() { if (+$('#pulse').value > 0 && !a.paused) initAudio(); saveSettings(); }
+$('#pulse').oninput = onPulse;
+a.addEventListener('play', () => { if (+$('#pulse').value > 0) initAudio(); });
+function react() {
+  const k = +$('#pulse').value / 100;
+  let target = 0;
+  if (k > 0 && an && !a.paused) {
+    an.getByteFrequencyData(fbuf);
+    let b = 0;
+    for (let i = 1; i <= 5; i++) b += fbuf[i];
+    b /= 5 * 255;
+    avgB = avgB * 0.96 + b * 0.04;
+    target = Math.max(0, Math.min(1, (b - avgB) * 4));
+  }
+  pv = Math.max(target, pv * 0.9);
+  const e = pv * k;
+  if (e < 0.002 && lastE < 0.002) return;
+  lastE = e;
+  document.documentElement.style.setProperty('--p', e.toFixed(3));
+  bg.style.transform = 'scale(' + (1 + e * 0.05).toFixed(4) + ')';
+  bg.style.filter = e < 0.002 ? '' : 'brightness(' + (1 + e * 0.35).toFixed(3) + ')';
+  $('#shade').style.opacity = Math.max(0, $('#shd').value / 100 - e * 0.25).toFixed(3);
+}
+
+/* Estilos guardados (color, velocidad, oscuridad y pulso) */
+let styles = LS.get('canto-estilos', []);
+function renderStyles() {
+  const sel = $('#sty');
+  sel.innerHTML = '';
+  const o0 = document.createElement('option');
+  o0.value = ''; o0.textContent = styles.length ? 'Mis estilos…' : 'Sin estilos guardados';
+  sel.appendChild(o0);
+  for (const st of styles) { const o = document.createElement('option'); o.value = st.name; o.textContent = st.name; sel.appendChild(o); }
+}
+$('#savesty').onclick = () => {
+  const name = (prompt('Nombre del estilo:') || '').trim();
+  if (!name) return;
+  const st = { name, color: $('#col').value, spd: $('#spd').value, shade: $('#shd').value, pulse: $('#pulse').value };
+  const i = styles.findIndex(x => x.name === name);
+  if (i >= 0) styles[i] = st; else styles.push(st);
+  LS.set('canto-estilos', styles); renderStyles(); $('#sty').value = name;
+  say('Estilo guardado: ' + name + '.');
+};
+$('#sty').onchange = e => {
+  const st = styles.find(x => x.name === e.target.value);
+  if (!st) return;
+  setColor(st.color);
+  $('#spd').value = st.spd;
+  $('#shd').value = st.shade; $('#shade').style.opacity = st.shade / 100;
+  $('#pulse').value = st.pulse;
+  onPulse(); saveMeta();
+  say('Estilo aplicado: ' + st.name + '.');
+};
+$('#delsty').onclick = () => {
+  const name = $('#sty').value;
+  if (!name) return say('Elige un estilo en la lista para borrarlo.');
+  if (!confirm('¿Borrar el estilo "' + name + '"?')) return;
+  styles = styles.filter(x => x.name !== name);
+  LS.set('canto-estilos', styles); renderStyles();
+  say('Estilo borrado.');
+};
+renderStyles();
+
 loadSongs();
 loadBgs();
 
