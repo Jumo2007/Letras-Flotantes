@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Letras flotantes</title>
+<title>Canto.LComp</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0a0607">
 <link rel="icon" href="icon-192.png">
@@ -30,6 +30,10 @@ body{background:radial-gradient(ellipse at 50% 65%,#2c0a11 0%,var(--bg) 68%);col
 .line.instant .ch{animation:none;opacity:1}
 @keyframes pop{from{opacity:0;filter:blur(6px)}to{opacity:1;filter:none}}
 select{font:inherit;font-size:.9rem;color:var(--ink);background:#120809;border:1px solid var(--line);border-radius:4px;padding:.4rem .5rem}
+#list{display:flex;flex-direction:column;gap:.35rem;margin-top:.6rem;max-height:30vh;overflow:auto}
+.song{display:flex;gap:.4rem}
+.song .pl{flex:1;min-width:0;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.song.on .pl{border-color:var(--gold);color:var(--gold)}
 #hint{position:fixed;inset:0;display:grid;place-items:center;text-align:center;color:var(--dim);font-family:"IM Fell English",Georgia,serif;font-style:italic;font-size:1.4rem;padding:2rem;pointer-events:none}
 #hint.gone{display:none}
 #bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);padding:.75rem 1rem;display:flex;flex-direction:column;gap:.6rem;transition:opacity .5s;max-height:80vh;overflow:auto}
@@ -56,11 +60,11 @@ output{min-width:3.6rem;text-align:center;font-variant-numeric:tabular-nums}
 <div id="bg"></div>
 <div id="shade"></div>
 <div id="stage"></div>
-<div id="hint">Carga un MP3 y busca su letra</div>
+<div id="hint">Agrega canciones a la biblioteca o abre un MP3</div>
 
 <div id="bar">
  <div class="row">
-  <label class="btn">Cargar MP3<input type="file" id="mp3" accept="audio/*" hidden></label>
+  <label class="btn">Abrir MP3 suelto<input type="file" id="mp3" accept="audio/*" hidden></label>
   <audio id="a" controls></audio>
   <label class="lbl">Color <input type="color" id="col" value="#d9a441" style="vertical-align:middle;background:none;border:0;width:2rem;height:1.6rem;padding:0"></label>
   <label class="lbl">Texto <select id="spd"><option value="0">Instantáneo</option><option value="0.3">Rápido</option><option value="1" selected>Normal</option></select></label>
@@ -71,10 +75,28 @@ output{min-width:3.6rem;text-align:center;font-variant-numeric:tabular-nums}
   <button id="fs">Pantalla completa</button>
  </div>
 
+ <details id="lib" open>
+  <summary>Biblioteca <span id="usage" class="lbl"></span></summary>
+  <div class="row">
+   <label class="btn">Agregar canciones<input type="file" id="addf" accept="audio/*" multiple hidden></label>
+   <button id="prev" title="Anterior" aria-label="Anterior">⏮</button>
+   <button id="next" title="Siguiente" aria-label="Siguiente">⏭</button>
+   <button id="savecur" class="main" hidden>Guardar canción abierta</button>
+   <label class="lbl">Al terminar <select id="mode"><option value="seq">Siguiente</option><option value="shuf">Aleatoria</option><option value="one">Repetir</option><option value="stop">Detener</option></select></label>
+  </div>
+  <div id="list"></div>
+ </details>
+
  <div class="row">
   <label class="btn">Fondo (foto o video)<input type="file" id="bgf" accept="image/*,video/*" hidden></label>
   <button id="bgx">Quitar fondo</button>
   <label class="lbl">Oscurecer <input type="range" id="shd" min="0" max="90" value="45" style="vertical-align:middle"></label>
+ </div>
+
+ <div class="row">
+  <button id="savebg">Guardar fondo</button>
+  <select id="mybg" aria-label="Mis fondos"></select>
+  <button id="delbg">Borrar fondo guardado</button>
  </div>
 
  <details id="adj">
@@ -118,6 +140,8 @@ output{min-width:3.6rem;text-align:center;font-variant-numeric:tabular-nums}
 const $ = s => document.querySelector(s);
 const a = $('#a'), stage = $('#stage'), bar = $('#bar');
 let lines = [], idx = 0, offset = 0, lrcText = '', sync = null;
+let curSong = null, songs = [], audioUrl = null, saveT;
+let bgs = [], curBg = null, looseFile = null;
 const say = t => $('#status').textContent = t;
 const fmtOff = () => (offset >= 0 ? '+' : '−') + Math.abs(offset).toFixed(1).replace('.', ',') + ' s';
 const fmt = t => { const m = Math.floor(t / 60); return String(m).padStart(2, '0') + ':' + (t - m * 60).toFixed(2).padStart(5, '0'); };
@@ -133,11 +157,12 @@ function parseLRC(txt) {
   }
   return out.sort((x, y) => x.t - y.t);
 }
-function setLyrics(txt) {
+function setLyrics(txt, save = true) {
   lrcText = txt;
   lines = parseLRC(txt);
   reseek();
   $('#hint').classList.toggle('gone', lines.length > 0);
+  if (save) saveMeta();
 }
 function reseek() {
   const t = a.currentTime - offset;
@@ -148,19 +173,34 @@ function reseek() {
 
 /* ---------- Efecto: una línea fija, letra por letra ---------- */
 let cur = null, lastSlot = null;
-const SLOTS = [
-  { x: 7, y: 20, a: 'left' },  { x: 7, y: 42, a: 'left' },  { x: 7, y: 64, a: 'left' },
-  { x: 7, y: 20, a: 'right' }, { x: 7, y: 42, a: 'right' }, { x: 7, y: 64, a: 'right' },
-  { x: 50, y: 30, a: 'center' }, { x: 50, y: 55, a: 'center' }
-];
+const SLOTS = [];
+for (const y of [16, 34, 52, 70]) SLOTS.push({ x: 6, y, a: 'left' }, { x: 6, y, a: 'right' });
+for (const y of [24, 46, 64]) SLOTS.push({ x: 50, y, a: 'center' });
+let lastSign = 1;
 function place(d) {
-  let pool = SLOTS.filter(s => s !== lastSlot && (!lastSlot || s.a !== lastSlot.a));
-  if (innerWidth < 700) pool = SLOTS.filter(s => s.a === 'center' && s !== lastSlot);
+  const narrow = innerWidth < 700;
+  const pool = SLOTS.filter(s => s !== lastSlot && (narrow ? s.a === 'center' : (!lastSlot || s.a !== lastSlot.a)));
   const s = pool[Math.floor(Math.random() * pool.length)];
   lastSlot = s;
   d.style.top = s.y + 'vh';
-  if (s.a === 'left') { d.style.left = s.x + 'vw'; d.style.transform = 'translateY(-50%)'; d.style.textAlign = 'left'; d.style.maxWidth = '48vw'; }
-  if (s.a === 'right') { d.style.left = 'auto'; d.style.right = s.x + 'vw'; d.style.transform = 'translateY(-50%)'; d.style.textAlign = 'right'; d.style.maxWidth = '48vw'; }
+  if (s.a === 'center') {
+    const ang = (lastSign = -lastSign) * (8 + Math.random() * 22);
+    d.style.maxWidth = narrow ? '80vw' : '60vw';
+    d.style.transformOrigin = 'center';
+    d.style.transform = 'translate(-50%,-50%) rotate(' + ang.toFixed(1) + 'deg)';
+    return;
+  }
+  /* El extremo libre de la línea se aleja del borde cercano, así nunca se sale de la pantalla */
+  const down = s.y < 46 ? 1 : -1;
+  const room = (down > 0 ? 100 - s.y : s.y) / 100 * innerHeight * 0.85;
+  const maxAng = Math.min(45, Math.asin(Math.min(1, room / (0.42 * innerWidth))) * 180 / Math.PI);
+  const mag = 10 + Math.random() * Math.max(0, maxAng - 10);
+  const ang = (s.a === 'left' ? down : -down) * mag;
+  d.style.maxWidth = '42vw';
+  d.style.textAlign = s.a;
+  d.style.transformOrigin = s.a + ' center';
+  d.style.transform = 'translateY(-50%) rotate(' + ang.toFixed(1) + 'deg)';
+  if (s.a === 'left') d.style.left = s.x + 'vw'; else { d.style.left = 'auto'; d.style.right = s.x + 'vw'; }
 }
 function fadeCur() {
   if (!cur) return;
@@ -211,13 +251,11 @@ requestAnimationFrame(tick);
 /* ---------- Fondo ---------- */
 const bg = $('#bg'); let bgUrl = null;
 function clearBg() { bg.innerHTML = ''; if (bgUrl) URL.revokeObjectURL(bgUrl); bgUrl = null; }
-$('#bgf').onchange = e => {
-  const f = e.target.files[0];
-  if (!f) return;
+function showBg(blob, isVideo) {
   clearBg();
-  bgUrl = URL.createObjectURL(f);
+  bgUrl = URL.createObjectURL(blob);
   let el;
-  if (f.type.startsWith('video')) {
+  if (isVideo) {
     el = document.createElement('video');
     el.src = bgUrl; el.muted = true; el.loop = true; el.preload = 'auto';
     el.setAttribute('playsinline', '');
@@ -226,8 +264,19 @@ $('#bgf').onchange = e => {
     el = document.createElement('img'); el.src = bgUrl; el.alt = '';
   }
   bg.appendChild(el);
+}
+$('#bgf').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const isVideo = f.type.startsWith('video');
+  curBg = { id: null, blob: f, isVideo, name: f.name };
+  showBg(f, isVideo);
   resetBg();
-  say('Fondo cargado. Ajusta "Oscurecer" si el texto no se lee bien.');
+  if (curSong) {
+    try { curSong.bgId = await saveBgToLib(); saveMeta(); say('Fondo guardado en esta canción y en Mis fondos.'); }
+    catch (err) { say('Fondo cargado, pero no se pudo guardar.'); }
+  } else { renderBgs(); say('Fondo cargado solo para esta sesión. Pulsa "Guardar fondo" para conservarlo.'); }
+  e.target.value = '';
 };
 const bgS = { fit: 'cover', z: 100, x: 50, y: 50 };
 const clamp = v => Math.max(0, Math.min(100, v));
@@ -241,16 +290,20 @@ function applyBg() {
 }
 function syncSliders() { $('#fit').value = bgS.fit; $('#zoom').value = bgS.z; $('#px').value = bgS.x; $('#py').value = bgS.y; }
 function resetBg() { Object.assign(bgS, { fit: 'cover', z: 100, x: 50, y: 50 }); syncSliders(); applyBg(); }
-$('#fit').onchange = e => { bgS.fit = e.target.value; applyBg(); };
-$('#zoom').oninput = e => { bgS.z = +e.target.value; applyBg(); };
-$('#px').oninput = e => { bgS.x = +e.target.value; applyBg(); };
-$('#py').oninput = e => { bgS.y = +e.target.value; applyBg(); };
-$('#rst').onclick = resetBg;
-$('#bgx').onclick = () => { clearBg(); say('Fondo quitado.'); };
+$('#fit').onchange = e => { bgS.fit = e.target.value; applyBg(); saveMeta(); };
+$('#zoom').oninput = e => { bgS.z = +e.target.value; applyBg(); saveMeta(); };
+$('#px').oninput = e => { bgS.x = +e.target.value; applyBg(); saveMeta(); };
+$('#py').oninput = e => { bgS.y = +e.target.value; applyBg(); saveMeta(); };
+$('#rst').onclick = () => { resetBg(); saveMeta(); };
+$('#bgx').onclick = () => {
+  clearBg(); curBg = null; renderBgs(); say('Fondo quitado.');
+  if (curSong) { curSong.bgId = ''; curSong.bgType = ''; saveMeta(); }
+};
 $('#shd').oninput = e => $('#shade').style.opacity = e.target.value / 100;
 a.addEventListener('play', () => { const v = bg.querySelector('video'); if (v) v.play().catch(() => {}); });
 a.addEventListener('pause', () => { const v = bg.querySelector('video'); if (v) v.pause(); });
-$('#col').oninput = e => document.documentElement.style.setProperty('--txt', e.target.value);
+function setColor(c) { $('#col').value = c; document.documentElement.style.setProperty('--txt', c); }
+$('#col').oninput = e => { setColor(e.target.value); saveMeta(); };
 a.addEventListener('seeked', reseek);
 a.addEventListener('loadedmetadata', reseek);
 
@@ -258,7 +311,7 @@ a.addEventListener('loadedmetadata', reseek);
 $('#mp3').onchange = e => {
   const f = e.target.files[0];
   if (!f) return;
-  a.src = URL.createObjectURL(f);
+  curSong = null; looseFile = f; a.src = URL.createObjectURL(f); renderList();
   const base = f.name.replace(/\.[^.]+$/, '');
   const parts = base.split(' - ');
   if (parts.length >= 2) { $('#artist').value = parts[0].trim(); $('#title').value = parts.slice(1).join(' - ').trim(); }
@@ -267,17 +320,22 @@ $('#mp3').onchange = e => {
 };
 
 /* ---------- Buscar en LRCLIB ---------- */
+async function fetchLRC(q) {
+  const r = await fetch('https://lrclib.net/api/search?q=' + encodeURIComponent(q));
+  const hits = (await r.json()).filter(x => x.syncedLyrics);
+  if (!hits.length) return null;
+  if (isFinite(a.duration)) hits.sort((x, y) => Math.abs(x.duration - a.duration) - Math.abs(y.duration - a.duration));
+  return hits[0];
+}
 $('#find').onclick = async () => {
   const q = ($('#artist').value + ' ' + $('#title').value).trim();
   if (!q) return say('Escribe artista y canción.');
   say('Buscando…');
   try {
-    const r = await fetch('https://lrclib.net/api/search?q=' + encodeURIComponent(q));
-    const hits = (await r.json()).filter(x => x.syncedLyrics);
-    if (!hits.length) return say('No hay letras sincronizadas para esa búsqueda. Prueba otro nombre, carga un .lrc o sincroniza tú mismo.');
-    if (isFinite(a.duration)) hits.sort((x, y) => Math.abs(x.duration - a.duration) - Math.abs(y.duration - a.duration));
-    setLyrics(hits[0].syncedLyrics);
-    say('Cargada: ' + hits[0].artistName + ' – ' + hits[0].trackName + '. Si sale desfasada, ajusta el desfase.');
+    const hit = await fetchLRC(q);
+    if (!hit) return say('No hay letras sincronizadas para esa búsqueda. Prueba otro nombre, carga un .lrc o sincroniza tú mismo.');
+    setLyrics(hit.syncedLyrics);
+    say('Cargada: ' + hit.artistName + ' – ' + hit.trackName + '. Si sale desfasada, ajusta el desfase.');
   } catch (err) {
     say('No se pudo conectar con LRCLIB. Revisa tu conexión e inténtalo de nuevo.');
   }
@@ -300,7 +358,7 @@ $('#dl').onclick = () => {
 };
 
 /* ---------- Desfase ---------- */
-function nudge(d) { offset = Math.round((offset + d) * 10) / 10; $('#off').textContent = fmtOff(); reseek(); }
+function nudge(d) { offset = Math.round((offset + d) * 10) / 10; $('#off').textContent = fmtOff(); reseek(); saveMeta(); }
 $('#less').onclick = () => nudge(-0.5);
 $('#more').onclick = () => nudge(0.5);
 
@@ -326,6 +384,201 @@ function tap() {
   } else showNext();
 }
 $('#tap').onclick = tap;
+
+/* ---------- Biblioteca guardada en el dispositivo (IndexedDB) ---------- */
+const DB = new Promise((res, rej) => {
+  const r = indexedDB.open('canto', 2);
+  r.onupgradeneeded = () => { for (const n of ['songs', 'files', 'bgs', 'bgfiles']) if (!r.result.objectStoreNames.contains(n)) r.result.createObjectStore(n, { keyPath: 'id' }); };
+  r.onsuccess = () => res(r.result);
+  r.onerror = () => rej(r.error);
+});
+function db(stores, mode, fn) {
+  return DB.then(d => new Promise((res, rej) => {
+    const t = d.transaction(stores, mode);
+    const out = fn(...[].concat(stores).map(n => t.objectStore(n)));
+    t.oncomplete = () => res(out && out.result);
+    t.onerror = t.onabort = () => rej(t.error);
+  }));
+}
+const songName = s => (s.artist ? s.artist + ' – ' : '') + s.title;
+function saveMeta() {
+  if (!curSong) return;
+  const s = curSong, snap = { lrc: lrcText, offset, color: $('#col').value, bgS: { ...bgS } };
+  clearTimeout(saveT);
+  saveT = setTimeout(() => { Object.assign(s, snap); db('songs', 'readwrite', st => st.put(s)).catch(() => {}); }, 300);
+}
+async function loadSongs() {
+  try { songs = (await db('songs', 'readonly', st => st.getAll())).sort((x, y) => x.added - y.added); }
+  catch (err) { songs = []; say('Tu navegador no permite guardar canciones aquí (¿modo privado?).'); }
+  renderList();
+}
+function renderList() {
+  $('#savecur').hidden = !(looseFile && !curSong);
+  const box = $('#list');
+  box.innerHTML = '';
+  if (!songs.length) { const p = document.createElement('div'); p.className = 'lbl'; p.textContent = 'Aún no hay canciones. Agrega MP3 para guardarlos en la app.'; box.appendChild(p); }
+  for (const s of songs) {
+    const row = document.createElement('div');
+    row.className = 'song' + (curSong && curSong.id === s.id ? ' on' : '');
+    const b = document.createElement('button'); b.className = 'pl'; b.textContent = songName(s); b.onclick = () => playSong(s.id);
+    const x = document.createElement('button'); x.textContent = '✕'; x.title = 'Borrar'; x.setAttribute('aria-label', 'Borrar ' + songName(s)); x.onclick = () => delSong(s.id);
+    row.append(b, x);
+    box.appendChild(row);
+  }
+  if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => { $('#usage').textContent = '· ' + Math.round(e.usage / 1048576) + ' MB guardados'; }).catch(() => {});
+}
+$('#addf').onchange = async e => {
+  const files = [...e.target.files];
+  let n = 0;
+  for (const f of files) {
+    const id = Date.now() + Math.random().toString(36).slice(2, 6);
+    const base = f.name.replace(/\.[^.]+$/, ''), p = base.split(' - ');
+    const meta = { id, artist: p.length > 1 ? p[0].trim() : '', title: p.length > 1 ? p.slice(1).join(' - ').trim() : base, lrc: '', offset: 0, color: '#d9a441', bgType: '', bgS: null, tried: false, added: Date.now() + n };
+    try { await db(['songs', 'files'], 'readwrite', (m, fl) => { m.put(meta); return fl.put({ id, audio: f, bg: null }); }); songs.push(meta); n++; }
+    catch (err) { say('No se pudo guardar "' + f.name + '". Puede que no quede espacio.'); break; }
+  }
+  e.target.value = '';
+  if (n) { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); say(n + (n === 1 ? ' canción guardada.' : ' canciones guardadas.') + ' Tócala en la lista para reproducirla.'); }
+  renderList();
+};
+async function loadBgs() {
+  try { bgs = (await db('bgs', 'readonly', st => st.getAll())).sort((x, y) => x.added - y.added); } catch (err) { bgs = []; }
+  renderBgs();
+}
+function renderBgs() {
+  const sel = $('#mybg');
+  sel.innerHTML = '';
+  const o0 = document.createElement('option');
+  o0.value = ''; o0.textContent = bgs.length ? 'Mis fondos…' : 'Sin fondos guardados';
+  sel.appendChild(o0);
+  for (const b of bgs) { const o = document.createElement('option'); o.value = b.id; o.textContent = (b.type === 'video' ? '🎬 ' : '🖼 ') + b.name; sel.appendChild(o); }
+  sel.value = curBg && curBg.id ? curBg.id : '';
+}
+async function saveBgToLib() {
+  if (!curBg) return '';
+  if (curBg.id) return curBg.id;
+  const id = 'bg' + Date.now() + Math.random().toString(36).slice(2, 5);
+  const meta = { id, name: curBg.name, type: curBg.isVideo ? 'video' : 'image', added: Date.now() };
+  await db(['bgs', 'bgfiles'], 'readwrite', (m, f) => { m.put(meta); return f.put({ id, blob: curBg.blob }); });
+  bgs.push(meta); curBg.id = id; renderBgs();
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  return id;
+}
+async function applyBgId(id) {
+  const meta = bgs.find(b => b.id === id);
+  if (!meta) return false;
+  const rec = await db('bgfiles', 'readonly', f => f.get(id));
+  if (!rec) return false;
+  curBg = { id, blob: rec.blob, isVideo: meta.type === 'video', name: meta.name };
+  showBg(rec.blob, curBg.isVideo);
+  return true;
+}
+$('#savebg').onclick = async () => {
+  if (!curBg) return say('Primero elige un fondo con "Fondo (foto o video)".');
+  try { const id = await saveBgToLib(); if (curSong) { curSong.bgId = id; saveMeta(); } say('Fondo guardado en Mis fondos.'); }
+  catch (err) { say('No se pudo guardar el fondo. Puede que no quede espacio.'); }
+};
+$('#mybg').onchange = async e => {
+  const id = e.target.value;
+  if (!id) return;
+  try {
+    if (await applyBgId(id)) { resetBg(); if (curSong) { curSong.bgId = id; saveMeta(); } say('Fondo aplicado.'); }
+    else say('No se encontró ese fondo.');
+  } catch (err) { say('No se pudo cargar el fondo.'); }
+};
+$('#delbg').onclick = async () => {
+  const id = $('#mybg').value;
+  if (!id) return say('Elige un fondo en la lista para borrarlo.');
+  const b = bgs.find(x => x.id === id);
+  if (!b || !confirm('¿Borrar el fondo "' + b.name + '" de Mis fondos?')) return;
+  try { await db(['bgs', 'bgfiles'], 'readwrite', (m, f) => { m.delete(id); return f.delete(id); }); } catch (err) { return say('No se pudo borrar.'); }
+  bgs = bgs.filter(x => x.id !== id);
+  if (curBg && curBg.id === id) curBg.id = null;
+  for (const sg of songs) if (sg.bgId === id) { sg.bgId = ''; db('songs', 'readwrite', st => st.put(sg)).catch(() => {}); }
+  renderBgs(); say('Fondo borrado de Mis fondos.');
+};
+$('#savecur').onclick = async () => {
+  if (curSong) return say('Esta canción ya está guardada.');
+  if (!looseFile) return say('Primero abre un MP3 con "Abrir MP3 suelto".');
+  const f = looseFile, id = Date.now() + Math.random().toString(36).slice(2, 6);
+  const title = $('#title').value.trim() || f.name.replace(/\.[^.]+$/, '');
+  try {
+    const bgId = curBg ? await saveBgToLib() : '';
+    const meta = { id, artist: $('#artist').value.trim(), title, lrc: lrcText, offset, color: $('#col').value, bgType: curBg ? (curBg.isVideo ? 'video' : 'image') : '', bgId, bgS: { ...bgS }, tried: false, added: Date.now() };
+    await db(['songs', 'files'], 'readwrite', (m, fl) => { m.put(meta); return fl.put({ id, audio: f, bg: null }); });
+    songs.push(meta); curSong = meta; looseFile = null; renderList();
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+    say('Canción guardada en la biblioteca, con su letra, color y fondo.');
+  } catch (err) { say('No se pudo guardar. Puede que no quede espacio.'); }
+};
+async function playSong(id) {
+  const meta = songs.find(x => x.id === id);
+  if (!meta) return;
+  let rec;
+  try { rec = await db('files', 'readonly', st => st.get(id)); } catch (err) {}
+  if (!rec) return say('No se encontró el archivo de esta canción.');
+  curSong = meta; looseFile = null;
+  if (audioUrl) URL.revokeObjectURL(audioUrl);
+  audioUrl = URL.createObjectURL(rec.audio);
+  a.src = audioUrl;
+  $('#artist').value = meta.artist; $('#title').value = meta.title;
+  offset = meta.offset || 0; $('#off').textContent = fmtOff();
+  setColor(meta.color || '#d9a441');
+  Object.assign(bgS, meta.bgS || { fit: 'cover', z: 100, x: 50, y: 50 });
+  let ok = false;
+  if (meta.bgId) { try { ok = await applyBgId(meta.bgId); } catch (err) {} }
+  if (!ok && rec.bg) { curBg = { id: null, blob: rec.bg, isVideo: meta.bgType === 'video', name: 'Fondo de la canción' }; showBg(rec.bg, curBg.isVideo); ok = true; }
+  if (!ok) { clearBg(); curBg = null; }
+  renderBgs(); syncSliders(); applyBg();
+  setLyrics(meta.lrc || '', false);
+  renderList();
+  a.play().catch(() => {});
+  if ('mediaSession' in navigator) navigator.mediaSession.metadata = new MediaMetadata({ title: meta.title, artist: meta.artist });
+  if (!meta.lrc && !meta.tried) autoSearch(meta); else say(songName(meta));
+}
+async function autoSearch(meta) {
+  say('Buscando letra…');
+  try {
+    for (let i = 0; i < 20 && a.readyState < 1; i++) await new Promise(r => setTimeout(r, 100));
+    const hit = await fetchLRC((meta.artist + ' ' + meta.title).trim());
+    if (curSong !== meta) return;
+    if (hit) { setLyrics(hit.syncedLyrics); say('Letra encontrada: ' + hit.artistName + ' – ' + hit.trackName + '.'); }
+    else { meta.tried = true; saveMeta(); say('No hay letra sincronizada para esta canción. Carga un .lrc o sincronízala tú mismo.'); }
+  } catch (err) { if (curSong === meta) say('No se pudo buscar la letra (¿sin internet?).'); }
+}
+async function delSong(id) {
+  const s = songs.find(x => x.id === id);
+  if (!s || !confirm('¿Borrar "' + songName(s) + '" de la biblioteca?')) return;
+  try { await db(['songs', 'files'], 'readwrite', (m, f) => { m.delete(id); return f.delete(id); }); } catch (err) { return say('No se pudo borrar.'); }
+  songs = songs.filter(x => x.id !== id);
+  if (curSong && curSong.id === id) { curSong = null; a.pause(); }
+  renderList();
+}
+function pick(dir) {
+  if (!songs.length) return -1;
+  const i = songs.findIndex(x => curSong && x.id === curSong.id);
+  if ($('#mode').value === 'shuf' && songs.length > 1) { let j; do { j = Math.floor(Math.random() * songs.length); } while (j === i); return j; }
+  return i < 0 ? 0 : (i + dir + songs.length) % songs.length;
+}
+const go = dir => { const k = pick(dir); if (k >= 0) playSong(songs[k].id); };
+$('#next').onclick = () => go(1);
+$('#prev').onclick = () => go(-1);
+a.addEventListener('ended', () => {
+  if (!curSong) return;
+  const m = $('#mode').value;
+  if (m === 'one') { a.currentTime = 0; a.play(); } else if (m !== 'stop') go(1);
+});
+['#artist', '#title'].forEach(q => $(q).onchange = () => {
+  if (!curSong) return;
+  curSong.artist = $('#artist').value; curSong.title = $('#title').value;
+  db('songs', 'readwrite', st => st.put(curSong)).catch(() => {});
+  renderList();
+});
+if ('mediaSession' in navigator) {
+  try { navigator.mediaSession.setActionHandler('nexttrack', () => go(1)); navigator.mediaSession.setActionHandler('previoustrack', () => go(-1)); } catch (err) {}
+}
+loadSongs();
+loadBgs();
 
 /* ---------- Atajos y barra ---------- */
 addEventListener('keydown', e => {
@@ -379,6 +632,7 @@ addEventListener('pointermove', e => {
 });
 addEventListener('pointerup', () => {
   if (drag && !drag.moved) bar.classList.contains('hide') ? showBar() : hideBar(true);
+  else if (drag && drag.moved) saveMeta();
   drag = null;
 });
 addEventListener('pointercancel', () => { drag = null; });
